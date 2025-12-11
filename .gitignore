@@ -44,3 +44,5 @@ htmlcov/
 
 # Docker leftovers
 *.pid
+LoRAModel/CodeLlama/Output/
+LoRAModel/QwenCoder/Output/

@@ -3,145 +3,135 @@ preprocess.py
 Path: AutoCode/FineTuning/CodeLlama7B/preprocess.py
 
 Description:
-    Preprocesses the BAAI/TACO dataset for the Test Generation model.
-    The goal is to train CodeLlama-7B to take a problem description and
-    output ONLY a valid JSON object containing test cases.
-
-    Output Format:
-    JSONL file where each line contains:
-    {
-        "text": "Full prompt + completion for training",
-        "prompt": "Input part",
-        "completion": "Target JSON output"
-    }
+    Preprocesses the BAAI/TACO dataset for CodeLlama-7B.
+    - Parses input/output pairs.
+    - Formats prompt for JSON Test Generation.
+    - Splits data into Train (95%) and Eval (5%) sets.
 """
 
 import os
 import json
 import logging
+import random
 from datasets import load_dataset
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Configuration Constants
-DATASET_NAME = "BAAI/TACO"
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "processed_taco_train.jsonl")
+# Configuration
+DATASET_ID = "BAAI/TACO"
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_TRAIN_FILE = os.path.join(CURRENT_DIR, "CodeLlama-TACO-Train.jsonl")
+OUTPUT_EVAL_FILE = os.path.join(CURRENT_DIR, "CodeLlama-TACO-Eval.jsonl")
 
-# Prompt Template
-# We design the prompt to force a specific mode of operation (JSON Generator).
-# The <|endoftext|> token is crucial for letting the model know when to stop generating.
-PROMPT_TEMPLATE = """Below is a programming problem. You are a QA Engineer agent.
-Your task is to generate a comprehensive set of unit tests in JSON format.
-Each test case must strictly adhere to the schema: {{"input": <value>, "output": <value>}}.
-Do not output any conversational text, only the JSON object.
-
-### Problem Description:
-{description}
-
-### Constraints:
-{constraints}
-
-### Test Cases (JSON):
-"""
+# Split Ratio (0.05 = 5% for evaluation)
+EVAL_RATIO = 0.05
 
 
-def format_taco_example(example):
+def format_io_to_json(io_string):
     """
-    Transforms a single row from the TACO dataset into the training format.
-
-    Args:
-        example (dict): A row from the Hugging Face dataset.
-
-    Returns:
-        dict: Processed example containing the full text for SFT.
+    Parses TACO's 'input_output' string and converts it to a clean JSON structure.
+    Returns None if the data is malformed.
     """
     try:
-        # 1. Extract Problem Description
-        # TACO structure varies, we extract the question content.
-        description = example.get('question_content', '').strip()
+        data = json.loads(io_string)
+        inputs = data.get('inputs', [])
+        outputs = data.get('outputs', [])
 
-        # 2. Extract and Normalize Constraints
-        # If explicit constraints aren't separated, we imply them or leave generic.
-        # TACO often embeds them in the description.
-        constraints = "See problem description for details."
-
-        # 3. Extract Input/Output Pairs
-        # TACO stores these in 'input_output' dict which contains lists.
-        io_data = example.get('input_output', {})
-        inputs = io_data.get('inputs', )
-        outputs = io_data.get('outputs', )
-
-        # Data Integrity Check
-        if not inputs or not outputs or len(inputs) != len(outputs):
+        if not inputs or not outputs:
             return None
 
-        # 4. Construct Test Cases JSON
-        # We limit to 5 test cases to manage context window efficiency during training.
+        # Pair them up
         test_cases = []
-        limit = min(len(inputs), 5)
+        # Limit to 5 test cases to keep context window manageable
+        for inp, out in zip(inputs[:5], outputs[:5]):
 
-        for i in range(limit):
-            # We must ensure the strings are properly escaped for JSON
+            # Simple sanitization
+            val_in = str(inp).strip()
+            val_out = str(out).strip()
+
+            # Skip massive blocks of text/binary data
+            if len(val_in) > 2000 or len(val_out) > 2000:
+                continue
+
             test_cases.append({
-                "input": inputs[i],
-                "output": outputs[i]
+                "input": val_in,
+                "output": val_out
             })
 
-        target_json = json.dumps(test_cases, indent=2)
+        if not test_cases:
+            return None
 
-        # 5. Construct Training Text
-        # The prompt introduces the task, the target_json provides the solution.
-        formatted_prompt = PROMPT_TEMPLATE.format(
-            description=description,
-            constraints=constraints
-        )
-
-        full_text = formatted_prompt + target_json + "\n<|endoftext|>"
-
-        return {
-            "text": full_text
-        }
-
+        return json.dumps(test_cases, indent=2)
     except Exception as e:
-        logger.warning(f"Skipping example due to error: {e}")
         return None
 
 
-def main():
-    logger.info(f"Loading dataset {DATASET_NAME}...")
-    # Loading split="train"
+def process():
+    logger.info(f"🌊 Downloading {DATASET_ID}...")
     try:
-        dataset = load_dataset(DATASET_NAME, split="train", trust_remote_code=True)
+        dataset = load_dataset(DATASET_ID, split="train")
     except Exception as e:
         logger.error(f"Failed to load dataset: {e}")
         return
 
-    logger.info(f"Dataset loaded. Rows: {len(dataset)}")
-    logger.info("Starting preprocessing pipeline...")
+    processed_data = []
 
-    processed_count = 0
-    skipped_count = 0
+    logger.info("⚙️ Processing rows...")
 
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        for row in dataset:
-            processed = format_taco_example(row)
-            if processed:
-                f.write(json.dumps(processed) + '\n')
-                processed_count += 1
-            else:
-                skipped_count += 1
+    for row in dataset:
+        question = row.get('question_content', row.get('question', '')).strip()
+        if not question:
+            continue
 
-            # Log progress every 1000 items
-            if (processed_count + skipped_count) % 1000 == 0:
-                logger.info(f"Processed: {processed_count}, Skipped: {skipped_count}")
+        io_string = row.get('input_output', '')
+        if not io_string:
+            continue
 
-    logger.info(f"Preprocessing complete.")
-    logger.info(f"Total Valid Examples: {processed_count}")
-    logger.info(f"Output saved to: {OUTPUT_FILE}")
+        target_json = format_io_to_json(io_string)
+        if not target_json:
+            continue
+
+        # Construct the Full Prompt text (Prompt + Completion + EOS)
+        # This formatting is what the model actually reads during training.
+        full_text = f"""Below is a programming problem. You are a QA Engineer agent.
+Your task is to generate unit tests in strict JSON format.
+
+### Rules:
+1. **Schema**: Output a JSON list of objects: [{{"input": <value>, "output": <value>}}]
+2. **Formatting**: Do NOT wrap numbers or arrays in quotes (unless they are strings).
+3. **Output**: Do not output any conversational text. Output ONLY the JSON array.
+
+### Problem Description:
+{question}
+
+### Test Cases (JSON):
+{target_json}<|endoftext|>"""
+
+        processed_data.append({"text": full_text})
+
+    logger.info(f"Total valid examples processed: {len(processed_data)}")
+
+    # Shuffle and Split
+    random.shuffle(processed_data)
+    split_index = int(len(processed_data) * (1 - EVAL_RATIO))
+
+    train_data = processed_data[:split_index]
+    eval_data = processed_data[split_index:]
+
+    # Save Train Data
+    logger.info(f"✅ Saving {len(train_data)} training examples to {OUTPUT_TRAIN_FILE}")
+    with open(OUTPUT_TRAIN_FILE, 'w', encoding='utf-8') as f:
+        for entry in train_data:
+            f.write(json.dumps(entry) + "\n")
+
+    # Save Eval Data
+    logger.info(f"✅ Saving {len(eval_data)} evaluation examples to {OUTPUT_EVAL_FILE}")
+    with open(OUTPUT_EVAL_FILE, 'w', encoding='utf-8') as f:
+        for entry in eval_data:
+            f.write(json.dumps(entry) + "\n")
 
 
 if __name__ == "__main__":
-    main()
+    process()
