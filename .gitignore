@@ -1,0 +1,46 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment/config files
+*.env
+*.env.*
+.envrc
+
+# IDE / Editor
+.idea/
+.vscode/
+
+# Node modules
+node_modules/
+
+# Unsloth compiled cache
+unsloth_compiled_cache/
+*/unsloth_compiled_cache/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build & dist
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Coverage / testing
+.coverage
+coverage.xml
+htmlcov/
+
+# Docker leftovers
+*.pid
